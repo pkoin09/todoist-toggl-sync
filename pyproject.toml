@@ -1,7 +1,17 @@
 [project]
 name = "todoist-toggletrak"
 version = "0.1.0"
-description = "Add your description here"
+description = "Sync Todoist task creation with Toggl Track time entries"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "flask==3.0.3",
+    "gunicorn==22.0.0",
+    "requests==2.32.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==8.3.5"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

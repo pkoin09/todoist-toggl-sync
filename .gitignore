@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local secrets and test artifacts
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.coverage
