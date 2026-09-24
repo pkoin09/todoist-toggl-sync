@@ -18,6 +18,7 @@ from typing import Any
 import requests
 from flask import Flask, jsonify, redirect, request
 from urllib.parse import urlencode
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 TODOIST_API_URL = "https://api.todoist.com/api/v1"
@@ -30,6 +31,9 @@ DELIVERY_CLAIM_TTL_SECONDS = 300
 OAUTH_STATE_TTL_SECONDS = 600
 
 app = Flask(__name__)
+# Railway terminates HTTPS before forwarding traffic to Gunicorn. Trust its
+# forwarded scheme and host so OAuth redirect URLs retain the public HTTPS URL.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",

@@ -51,11 +51,21 @@ def test_health(client):
 
 
 def test_todoist_oauth_start(client):
-    response = client.get("/oauth/todoist/start")
+    response = client.get(
+        "/oauth/todoist/start",
+        headers={
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Host": "todoist-sync.example.com",
+        },
+    )
     assert response.status_code == 302
     assert response.location.startswith("https://app.todoist.com/oauth/authorize?")
     assert "client_id=todoist-client" in response.location
     assert "scope=data%3Aread_write" in response.location
+    assert (
+        "redirect_uri=https%3A%2F%2Ftodoist-sync.example.com%2Foauth%2Ftodoist%2Fcallback"
+        in response.location
+    )
 
 
 @patch("main.requests.post")
