@@ -15,3 +15,5 @@ wheels/
 !.env.example
 .pytest_cache/
 .coverage
+data/*.sqlite3
+data/*.sqlite3-*

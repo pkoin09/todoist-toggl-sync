@@ -8,7 +8,10 @@ import hmac
 import logging
 import os
 import re
+import sqlite3
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -20,6 +23,8 @@ TOGGL_API_URL = "https://api.track.toggl.com/api/v9"
 TODOIST_MARKER = re.compile(r"\[todoist:([^\]]+)]")
 HTTP_TIMEOUT_SECONDS = 15
 DEFAULT_TRIGGER_LABEL = "work"
+DEFAULT_IDEMPOTENCY_DB_PATH = "data/webhook_deliveries.sqlite3"
+DELIVERY_CLAIM_TTL_SECONDS = 300
 
 app = Flask(__name__)
 logging.basicConfig(
@@ -37,7 +42,11 @@ def _env(name: str) -> str:
 
 
 def _trigger_label() -> str:
-    return os.getenv("TODOIST_TRIGGER_LABEL", DEFAULT_TRIGGER_LABEL).removeprefix("@").casefold()
+    return (
+        os.getenv("TODOIST_TRIGGER_LABEL", DEFAULT_TRIGGER_LABEL)
+        .removeprefix("@")
+        .casefold()
+    )
 
 
 def _has_trigger_label(task: dict[str, Any]) -> bool:
@@ -50,6 +59,77 @@ def _has_trigger_label(task: dict[str, Any]) -> bool:
         if isinstance(label, str)
     }
     return _trigger_label() in normalized
+
+
+def _delivery_key(provider: str, identifier: Any, body: bytes) -> str:
+    stable_id = (
+        str(identifier)
+        if identifier is not None
+        else hashlib.sha256(body).hexdigest()
+    )
+    return f"{provider}:{stable_id}"
+
+
+def _idempotency_connection() -> sqlite3.Connection:
+    database_path = Path(
+        os.getenv("IDEMPOTENCY_DB_PATH", DEFAULT_IDEMPOTENCY_DB_PATH)
+    )
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(database_path, timeout=5)
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS webhook_deliveries (
+            delivery_key TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """
+    )
+    return connection
+
+
+def _claim_delivery(delivery_key: str) -> bool:
+    """Atomically reserve a delivery, reclaiming abandoned work after five minutes."""
+    now = time.time()
+    stale_before = now - DELIVERY_CLAIM_TTL_SECONDS
+    with _idempotency_connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT status, updated_at FROM webhook_deliveries WHERE delivery_key = ?",
+            (delivery_key,),
+        ).fetchone()
+        if row is None:
+            connection.execute(
+                "INSERT INTO webhook_deliveries VALUES (?, 'processing', ?)",
+                (delivery_key, now),
+            )
+            return True
+        status, updated_at = row
+        if status == "processing" and updated_at < stale_before:
+            connection.execute(
+                "UPDATE webhook_deliveries SET updated_at = ? WHERE delivery_key = ?",
+                (now, delivery_key),
+            )
+            return True
+        return False
+
+
+def _complete_delivery(delivery_key: str) -> None:
+    with _idempotency_connection() as connection:
+        connection.execute(
+            "UPDATE webhook_deliveries SET status = 'completed', updated_at = ? "
+            "WHERE delivery_key = ?",
+            (time.time(), delivery_key),
+        )
+
+
+def _release_delivery(delivery_key: str) -> None:
+    with _idempotency_connection() as connection:
+        connection.execute(
+            "DELETE FROM webhook_deliveries "
+            "WHERE delivery_key = ? AND status = 'processing'",
+            (delivery_key,),
+        )
 
 
 def _todoist_signature_is_valid(body: bytes, signature: str | None) -> bool:
@@ -176,9 +256,25 @@ def todoist_webhook():
         return jsonify(status="ignored", reason="trigger label missing"), 200
 
     task_id = str(task["id"])
+    delivery_key = _delivery_key(
+        "todoist", request.headers.get("X-Todoist-Delivery-ID"), body
+    )
     try:
+        if not _claim_delivery(delivery_key):
+            return jsonify(status="duplicate"), 200
         entry = _start_toggl_entry(task_id, str(task["content"]))
-    except (RuntimeError, requests.RequestException, ValueError) as exc:
+        _complete_delivery(delivery_key)
+    except (
+        RuntimeError,
+        requests.RequestException,
+        ValueError,
+        sqlite3.Error,
+        OSError,
+    ) as exc:
+        try:
+            _release_delivery(delivery_key)
+        except (sqlite3.Error, OSError):
+            logger.exception("Could not release Todoist delivery claim")
         logger.exception("Could not start Toggl timer for Todoist task %s", task_id)
         return jsonify(error=str(exc)), 502
 
@@ -219,11 +315,24 @@ def toggl_webhook():
         return jsonify(status="ignored"), 200
 
     task_id = match.group(1)
+    delivery_key = _delivery_key("toggl", payload.get("event_id"), body)
     try:
+        if not _claim_delivery(delivery_key):
+            return jsonify(status="duplicate"), 200
         _post_todoist_comment(
             task_id, f"Toggl time tracked: **{_format_duration(duration)}**"
         )
-    except (RuntimeError, requests.RequestException) as exc:
+        _complete_delivery(delivery_key)
+    except (
+        RuntimeError,
+        requests.RequestException,
+        sqlite3.Error,
+        OSError,
+    ) as exc:
+        try:
+            _release_delivery(delivery_key)
+        except (sqlite3.Error, OSError):
+            logger.exception("Could not release Toggl delivery claim")
         logger.exception("Could not comment on Todoist task %s", task_id)
         return jsonify(error=str(exc)), 502
 

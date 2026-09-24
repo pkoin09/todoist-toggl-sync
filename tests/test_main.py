@@ -10,12 +10,13 @@ import main
 
 
 @pytest.fixture(autouse=True)
-def environment(monkeypatch):
+def environment(monkeypatch, tmp_path):
     monkeypatch.setenv("TODOIST_TOKEN", "todoist-token")
     monkeypatch.setenv("TODOIST_CLIENT_SECRET", "todoist-secret")
     monkeypatch.setenv("TOGGL_API_TOKEN", "toggl-token")
     monkeypatch.setenv("TOGGL_WORKSPACE_ID", "123")
     monkeypatch.setenv("TOGGL_WEBHOOK_SECRET", "toggl-secret")
+    monkeypatch.setenv("IDEMPOTENCY_DB_PATH", str(tmp_path / "deliveries.sqlite3"))
 
 
 @pytest.fixture
@@ -34,10 +35,11 @@ def toggl_signature(body: bytes) -> str:
     return f"sha256={digest}"
 
 
-def post_signed(client, path, payload, header, signer):
+def post_signed(client, path, payload, header, signer, extra_headers=None):
     body = json.dumps(payload, separators=(",", ":")).encode()
+    headers = {header: signer(body), **(extra_headers or {})}
     return client.post(
-        path, data=body, content_type="application/json", headers={header: signer(body)}
+        path, data=body, content_type="application/json", headers=headers
     )
 
 
@@ -106,6 +108,40 @@ def test_todoist_trigger_label_is_configurable(request_post, client, monkeypatch
 
 
 @patch("main.requests.post")
+def test_duplicate_todoist_delivery_only_starts_one_timer(request_post, client):
+    upstream = Mock()
+    upstream.raise_for_status.return_value = None
+    upstream.json.return_value = {"id": 456}
+    request_post.return_value = upstream
+    payload = {
+        "event_name": "item:added",
+        "event_data": {"id": "task-1", "content": "Ship it", "labels": ["work"]},
+    }
+    headers = {"X-Todoist-Delivery-ID": "delivery-1"}
+
+    first = post_signed(
+        client,
+        "/webhooks/todoist",
+        payload,
+        "X-Todoist-Hmac-SHA256",
+        todoist_signature,
+        headers,
+    )
+    second = post_signed(
+        client,
+        "/webhooks/todoist",
+        payload,
+        "X-Todoist-Hmac-SHA256",
+        todoist_signature,
+        headers,
+    )
+
+    assert first.json["status"] == "started"
+    assert second.json == {"status": "duplicate"}
+    request_post.assert_called_once()
+
+
+@patch("main.requests.post")
 def test_stopped_toggl_entry_posts_todoist_comment(request_post, client):
     upstream = Mock()
     upstream.raise_for_status.return_value = None
@@ -131,6 +167,71 @@ def test_stopped_toggl_entry_posts_todoist_comment(request_post, client):
         "task_id": "task-1",
         "content": "Toggl time tracked: **1h 2m 3s**",
     }
+
+
+@patch("main.requests.post")
+def test_duplicate_toggl_event_only_posts_one_comment(request_post, client):
+    upstream = Mock()
+    upstream.raise_for_status.return_value = None
+    upstream.json.return_value = {"id": "comment-1"}
+    request_post.return_value = upstream
+    payload = {
+        "event_id": 999,
+        "payload": {
+            "id": 456,
+            "description": "Ship it [todoist:task-1]",
+            "duration": 60,
+            "start": "2026-01-01T10:00:00Z",
+            "stop": "2026-01-01T10:01:00Z",
+        },
+    }
+
+    first = post_signed(
+        client, "/webhooks/toggl", payload, "X-Webhook-Signature-256", toggl_signature
+    )
+    second = post_signed(
+        client, "/webhooks/toggl", payload, "X-Webhook-Signature-256", toggl_signature
+    )
+
+    assert first.json["status"] == "commented"
+    assert second.json == {"status": "duplicate"}
+    request_post.assert_called_once()
+
+
+@patch("main.requests.post")
+def test_failed_delivery_is_released_for_retry(request_post, client):
+    failed = Mock()
+    failed.raise_for_status.side_effect = main.requests.HTTPError("temporary failure")
+    succeeded = Mock()
+    succeeded.raise_for_status.return_value = None
+    succeeded.json.return_value = {"id": 456}
+    request_post.side_effect = [failed, succeeded]
+    payload = {
+        "event_name": "item:added",
+        "event_data": {"id": "task-1", "content": "Ship it", "labels": ["work"]},
+    }
+    headers = {"X-Todoist-Delivery-ID": "retryable-delivery"}
+
+    first = post_signed(
+        client,
+        "/webhooks/todoist",
+        payload,
+        "X-Todoist-Hmac-SHA256",
+        todoist_signature,
+        headers,
+    )
+    second = post_signed(
+        client,
+        "/webhooks/todoist",
+        payload,
+        "X-Todoist-Hmac-SHA256",
+        todoist_signature,
+        headers,
+    )
+
+    assert first.status_code == 502
+    assert second.json["status"] == "started"
+    assert request_post.call_count == 2
 
 
 @patch("main.requests.post")

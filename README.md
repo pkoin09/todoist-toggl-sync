@@ -30,6 +30,7 @@ Variables dashboard for production:
 | `TOGGL_API_TOKEN` | Toggl Track Profile → API Token |
 | `TOGGL_WORKSPACE_ID` | Numeric Toggl workspace ID |
 | `TOGGL_WEBHOOK_SECRET` | Secret used for the Toggl webhook subscription |
+| `IDEMPOTENCY_DB_PATH` | Optional SQLite path (default: `data/webhook_deliveries.sqlite3`) |
 
 Never commit a populated `.env` file.
 
@@ -61,6 +62,8 @@ python -m pytest -q
 4. Confirm `https://<domain>/health` returns `{"status":"ok"}`.
 
 The included `Procfile` starts `gunicorn main:app` on Railway's assigned port.
+For idempotency records to survive deployments, mount a Railway volume at
+`/data` and set `IDEMPOTENCY_DB_PATH=/data/webhook_deliveries.sqlite3`.
 
 ## Register webhooks
 
@@ -99,7 +102,9 @@ validate the callback.
 
 - [x] **Recommended:** Only start a Toggl timer when a newly created Todoist
   task has the `@work` label (`work` in the webhook payload).
-- [ ] Test the automatic timer-start behavior in the real workflow and adjust
-  the trigger if it is too disruptive.
-- [ ] Add persistent webhook idempotency before treating the service as
+- [x] Make the automatic timer trigger adjustable through
+  `TODOIST_TRIGGER_LABEL`.
+- [x] Add persistent webhook idempotency before treating the service as
   production-ready.
+- [ ] Validate the selected trigger and automatic timer behavior in the live
+  workflow after deployment.
