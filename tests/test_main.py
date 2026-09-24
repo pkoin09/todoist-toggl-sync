@@ -60,7 +60,7 @@ def test_todoist_task_starts_toggl_timer(request_post, client):
     request_post.return_value = upstream
     payload = {
         "event_name": "item:added",
-        "event_data": {"id": "task-1", "content": "Ship it"},
+        "event_data": {"id": "task-1", "content": "Ship it", "labels": ["work"]},
     }
     response = post_signed(
         client, "/webhooks/todoist", payload, "X-Todoist-Hmac-SHA256", todoist_signature
@@ -71,6 +71,38 @@ def test_todoist_task_starts_toggl_timer(request_post, client):
     assert kwargs["auth"] == ("toggl-token", "api_token")
     assert kwargs["json"]["description"] == "Ship it [todoist:task-1]"
     assert kwargs["json"]["duration"] == -1
+
+
+@patch("main.requests.post")
+def test_todoist_task_without_work_label_is_ignored(request_post, client):
+    payload = {
+        "event_name": "item:added",
+        "event_data": {"id": "task-2", "content": "Buy milk", "labels": ["home"]},
+    }
+    response = post_signed(
+        client, "/webhooks/todoist", payload, "X-Todoist-Hmac-SHA256", todoist_signature
+    )
+    assert response.status_code == 200
+    assert response.json == {"status": "ignored", "reason": "trigger label missing"}
+    request_post.assert_not_called()
+
+
+@patch("main.requests.post")
+def test_todoist_trigger_label_is_configurable(request_post, client, monkeypatch):
+    monkeypatch.setenv("TODOIST_TRIGGER_LABEL", "@client")
+    upstream = Mock()
+    upstream.raise_for_status.return_value = None
+    upstream.json.return_value = {"id": 789}
+    request_post.return_value = upstream
+    payload = {
+        "event_name": "item:added",
+        "event_data": {"id": "task-3", "content": "Client call", "labels": ["Client"]},
+    }
+    response = post_signed(
+        client, "/webhooks/todoist", payload, "X-Todoist-Hmac-SHA256", todoist_signature
+    )
+    assert response.status_code == 200
+    assert response.json == {"status": "started", "time_entry_id": 789}
 
 
 @patch("main.requests.post")

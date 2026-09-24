@@ -7,7 +7,8 @@ timer stops.
 ## Flow
 
 1. Todoist sends an `item:added` event to `POST /webhooks/todoist`.
-2. The service validates `X-Todoist-Hmac-SHA256` and creates a running Toggl
+2. The service validates `X-Todoist-Hmac-SHA256`. When the task has the
+   configured trigger label (`@work` by default), it creates a running Toggl
    entry named `<task content> [todoist:<task id>]`.
 3. Toggl sends a `time_entry` `updated` event to `POST /webhooks/toggl`.
 4. The service validates `X-Webhook-Signature-256`. If the tagged entry has
@@ -25,6 +26,7 @@ Variables dashboard for production:
 | --- | --- |
 | `TODOIST_TOKEN` | Todoist Settings → Integrations → Developer |
 | `TODOIST_CLIENT_SECRET` | Todoist App Management Console |
+| `TODOIST_TRIGGER_LABEL` | Optional; label that starts a timer (default: `work`) |
 | `TOGGL_API_TOKEN` | Toggl Track Profile → API Token |
 | `TOGGL_WORKSPACE_ID` | Numeric Toggl workspace ID |
 | `TOGGL_WEBHOOK_SECRET` | Secret used for the Toggl webhook subscription |
@@ -86,7 +88,8 @@ validate the callback.
 
 ## Test the live integration
 
-1. Add a Todoist task and confirm a running Toggl entry appears.
+1. Add a Todoist task with the `@work` label and confirm a running Toggl entry
+   appears. A task without that label should be ignored.
 2. Stop that Toggl timer.
 3. Confirm a comment such as `Toggl time tracked: **12m 8s**` appears on the
    Todoist task.
@@ -94,7 +97,7 @@ validate the callback.
 
 ## TODO
 
-- [ ] **Recommended:** Only start a Toggl timer when a newly created Todoist
+- [x] **Recommended:** Only start a Toggl timer when a newly created Todoist
   task has the `@work` label (`work` in the webhook payload).
 - [ ] Test the automatic timer-start behavior in the real workflow and adjust
   the trigger if it is too disruptive.

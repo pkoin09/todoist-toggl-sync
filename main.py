@@ -19,6 +19,7 @@ TODOIST_API_URL = "https://api.todoist.com/api/v1"
 TOGGL_API_URL = "https://api.track.toggl.com/api/v9"
 TODOIST_MARKER = re.compile(r"\[todoist:([^\]]+)]")
 HTTP_TIMEOUT_SECONDS = 15
+DEFAULT_TRIGGER_LABEL = "work"
 
 app = Flask(__name__)
 logging.basicConfig(
@@ -33,6 +34,22 @@ def _env(name: str) -> str:
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return value
+
+
+def _trigger_label() -> str:
+    return os.getenv("TODOIST_TRIGGER_LABEL", DEFAULT_TRIGGER_LABEL).removeprefix("@").casefold()
+
+
+def _has_trigger_label(task: dict[str, Any]) -> bool:
+    labels = task.get("labels", [])
+    if not isinstance(labels, list):
+        return False
+    normalized = {
+        str(label).removeprefix("@").casefold()
+        for label in labels
+        if isinstance(label, str)
+    }
+    return _trigger_label() in normalized
 
 
 def _todoist_signature_is_valid(body: bytes, signature: str | None) -> bool:
@@ -150,6 +167,13 @@ def todoist_webhook():
     task = payload.get("event_data")
     if not isinstance(task, dict) or not task.get("id") or not task.get("content"):
         return jsonify(error="missing task id or content"), 400
+    if not _has_trigger_label(task):
+        logger.info(
+            "Ignored Todoist task %s without @%s label",
+            task["id"],
+            _trigger_label(),
+        )
+        return jsonify(status="ignored", reason="trigger label missing"), 200
 
     task_id = str(task["id"])
     try:
