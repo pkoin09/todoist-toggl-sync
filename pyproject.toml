@@ -5,7 +5,7 @@ description = "Sync Todoist task creation with Toggl Track time entries"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "flask==3.0.3",
+    "flask==3.1.3",
     "gunicorn==22.0.0",
     "requests==2.32.3",
 ]
