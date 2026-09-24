@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "flask==3.0.3",
     "gunicorn==22.0.0",
-    "requests==2.32.3",
+    "requests==2.33.0",
 ]
 
 [project.optional-dependencies]
