@@ -57,7 +57,9 @@ def _trigger_label() -> str:
 
 
 def _todoist_redirect_uri() -> str:
-    return f"{request.url_root.rstrip('/')}/oauth/todoist/callback"
+    # Todoist requires HTTPS callback URLs. Railway terminates TLS before the
+    # request reaches Flask and does not consistently expose the public scheme.
+    return f"https://{request.host}/oauth/todoist/callback"
 
 
 def _oauth_state() -> str:
