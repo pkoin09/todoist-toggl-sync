@@ -199,6 +199,42 @@ def test_duplicate_toggl_event_only_posts_one_comment(request_post, client):
 
 
 @patch("main.requests.post")
+def test_later_update_to_stopped_entry_does_not_post_another_comment(
+    request_post, client
+):
+    upstream = Mock()
+    upstream.raise_for_status.return_value = None
+    upstream.json.return_value = {"id": "comment-1"}
+    request_post.return_value = upstream
+    entry = {
+        "id": 456,
+        "description": "Ship it [todoist:task-1]",
+        "duration": 60,
+        "start": "2026-01-01T10:00:00Z",
+        "stop": "2026-01-01T10:01:00Z",
+    }
+
+    first = post_signed(
+        client,
+        "/webhooks/toggl",
+        {"event_id": 1001, "payload": entry},
+        "X-Webhook-Signature-256",
+        toggl_signature,
+    )
+    second = post_signed(
+        client,
+        "/webhooks/toggl",
+        {"event_id": 1002, "payload": {**entry, "tags": ["edited-later"]}},
+        "X-Webhook-Signature-256",
+        toggl_signature,
+    )
+
+    assert first.json["status"] == "commented"
+    assert second.json == {"status": "duplicate"}
+    request_post.assert_called_once()
+
+
+@patch("main.requests.post")
 def test_failed_delivery_is_released_for_retry(request_post, client):
     failed = Mock()
     failed.raise_for_status.side_effect = main.requests.HTTPError("temporary failure")

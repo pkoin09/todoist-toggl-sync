@@ -315,7 +315,19 @@ def toggl_webhook():
         return jsonify(status="ignored"), 200
 
     task_id = match.group(1)
-    delivery_key = _delivery_key("toggl", payload.get("event_id"), body)
+    # A stopped entry can produce more than one distinct "updated" webhook
+    # (for example, when its project or tags change later). Key the side effect
+    # by the entry itself so its duration is reported to Todoist only once.
+    time_entry_id = entry.get("id")
+    delivery_key = _delivery_key(
+        "toggl-time-entry",
+        (
+            f"{time_entry_id}:stopped"
+            if time_entry_id is not None
+            else payload.get("event_id")
+        ),
+        body,
+    )
     try:
         if not _claim_delivery(delivery_key):
             return jsonify(status="duplicate"), 200

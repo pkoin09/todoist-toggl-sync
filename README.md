@@ -106,5 +106,7 @@ validate the callback.
   `TODOIST_TRIGGER_LABEL`.
 - [x] Add persistent webhook idempotency before treating the service as
   production-ready.
+- [x] Report each stopped Toggl time entry only once, even if later edits emit
+  additional `updated` events.
 - [ ] Validate the selected trigger and automatic timer behavior in the live
   workflow after deployment.
