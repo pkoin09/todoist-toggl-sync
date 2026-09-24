@@ -12,6 +12,7 @@ import main
 @pytest.fixture(autouse=True)
 def environment(monkeypatch, tmp_path):
     monkeypatch.setenv("TODOIST_TOKEN", "todoist-token")
+    monkeypatch.setenv("TODOIST_CLIENT_ID", "todoist-client")
     monkeypatch.setenv("TODOIST_CLIENT_SECRET", "todoist-secret")
     monkeypatch.setenv("TOGGL_API_TOKEN", "toggl-token")
     monkeypatch.setenv("TOGGL_WORKSPACE_ID", "123")
@@ -47,6 +48,38 @@ def test_health(client):
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json == {"status": "ok"}
+
+
+def test_todoist_oauth_start(client):
+    response = client.get("/oauth/todoist/start")
+    assert response.status_code == 302
+    assert response.location.startswith("https://app.todoist.com/oauth/authorize?")
+    assert "client_id=todoist-client" in response.location
+    assert "scope=data%3Aread_write" in response.location
+
+
+@patch("main.requests.post")
+def test_todoist_oauth_callback_exchanges_code(request_post, client):
+    upstream = Mock()
+    upstream.raise_for_status.return_value = None
+    request_post.return_value = upstream
+    state = main._oauth_state()
+
+    response = client.get(
+        "/oauth/todoist/callback", query_string={"code": "auth-code", "state": state}
+    )
+
+    assert response.status_code == 200
+    assert response.json["status"] == "authorized"
+    assert request_post.call_args.kwargs["data"]["code"] == "auth-code"
+
+
+def test_todoist_oauth_callback_rejects_invalid_state(client):
+    response = client.get(
+        "/oauth/todoist/callback",
+        query_string={"code": "auth-code", "state": "invalid"},
+    )
+    assert response.status_code == 400
 
 
 def test_rejects_invalid_signatures(client):

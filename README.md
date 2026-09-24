@@ -25,6 +25,7 @@ Variables dashboard for production:
 | Variable | Source |
 | --- | --- |
 | `TODOIST_TOKEN` | Todoist Settings → Integrations → Developer |
+| `TODOIST_CLIENT_ID` | Todoist App Management Console |
 | `TODOIST_CLIENT_SECRET` | Todoist App Management Console |
 | `TODOIST_TRIGGER_LABEL` | Optional; label that starts a timer (default: `work`) |
 | `TOGGL_API_TOKEN` | Toggl Track Profile → API Token |
@@ -72,6 +73,16 @@ In the Todoist App Management Console, subscribe to `item:added` with:
 ```text
 https://<domain>/webhooks/todoist
 ```
+
+Configure this OAuth redirect URL in the same console:
+
+```text
+https://<domain>/oauth/todoist/callback
+```
+
+After deployment, visit `https://<domain>/oauth/todoist/start` and approve the
+app with the Todoist account that should emit webhook events. The callback
+exchanges the short-lived code server-side and never displays the token.
 
 Create a Toggl Track webhook subscription with the callback below, the same
 secret stored in `TOGGL_WEBHOOK_SECRET`, and this event filter:

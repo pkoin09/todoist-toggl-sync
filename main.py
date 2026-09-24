@@ -8,6 +8,7 @@ import hmac
 import logging
 import os
 import re
+import secrets
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -15,7 +16,8 @@ from pathlib import Path
 from typing import Any
 
 import requests
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, redirect, request
+from urllib.parse import urlencode
 
 
 TODOIST_API_URL = "https://api.todoist.com/api/v1"
@@ -25,6 +27,7 @@ HTTP_TIMEOUT_SECONDS = 15
 DEFAULT_TRIGGER_LABEL = "work"
 DEFAULT_IDEMPOTENCY_DB_PATH = "data/webhook_deliveries.sqlite3"
 DELIVERY_CLAIM_TTL_SECONDS = 300
+OAUTH_STATE_TTL_SECONDS = 600
 
 app = Flask(__name__)
 logging.basicConfig(
@@ -47,6 +50,35 @@ def _trigger_label() -> str:
         .removeprefix("@")
         .casefold()
     )
+
+
+def _todoist_redirect_uri() -> str:
+    return f"{request.url_root.rstrip('/')}/oauth/todoist/callback"
+
+
+def _oauth_state() -> str:
+    payload = f"{int(time.time())}.{secrets.token_urlsafe(24)}"
+    signature = hmac.new(
+        _env("TODOIST_CLIENT_SECRET").encode(), payload.encode(), hashlib.sha256
+    ).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def _oauth_state_is_valid(state: str | None) -> bool:
+    if not state:
+        return False
+    try:
+        timestamp, nonce, signature = state.split(".", 2)
+        issued_at = int(timestamp)
+    except (TypeError, ValueError):
+        return False
+    if not nonce or not 0 <= time.time() - issued_at <= OAUTH_STATE_TTL_SECONDS:
+        return False
+    payload = f"{timestamp}.{nonce}"
+    expected = hmac.new(
+        _env("TODOIST_CLIENT_SECRET").encode(), payload.encode(), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
 
 def _has_trigger_label(task: dict[str, Any]) -> bool:
@@ -222,6 +254,52 @@ def _format_duration(seconds: int) -> str:
 @app.get("/health")
 def health():
     return jsonify(status="ok")
+
+
+@app.get("/oauth/todoist/start")
+def todoist_oauth_start():
+    try:
+        query = urlencode(
+            {
+                "client_id": _env("TODOIST_CLIENT_ID"),
+                "scope": "data:read_write",
+                "state": _oauth_state(),
+                "response_type": "code",
+                "redirect_uri": _todoist_redirect_uri(),
+            }
+        )
+    except RuntimeError as exc:
+        logger.error("Todoist OAuth configuration error: %s", exc)
+        return jsonify(error=str(exc)), 503
+    return redirect(f"https://app.todoist.com/oauth/authorize?{query}")
+
+
+@app.get("/oauth/todoist/callback")
+def todoist_oauth_callback():
+    try:
+        if not _oauth_state_is_valid(request.args.get("state")):
+            return jsonify(error="invalid or expired OAuth state"), 400
+        code = request.args.get("code")
+        if not code:
+            return jsonify(error=request.args.get("error", "missing authorization code")), 400
+        response = requests.post(
+            "https://api.todoist.com/oauth/access_token",
+            data={
+                "client_id": _env("TODOIST_CLIENT_ID"),
+                "client_secret": _env("TODOIST_CLIENT_SECRET"),
+                "code": code,
+                "redirect_uri": _todoist_redirect_uri(),
+            },
+            timeout=HTTP_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except (RuntimeError, requests.RequestException) as exc:
+        logger.exception("Could not complete Todoist OAuth authorization")
+        return jsonify(error="Todoist authorization failed", detail=str(exc)), 502
+    return jsonify(
+        status="authorized",
+        message="Todoist webhook activation is complete. You may close this page.",
+    )
 
 
 @app.post("/webhooks/todoist")
